@@ -1,0 +1,27 @@
+# Production Compose file (Session 3): installed to /srv/taskapi/compose.yaml.
+# It never builds; it pulls the exact image digest written by deploy.sh.
+name: taskapi
+
+services:
+  app:
+    # Set by deploy.sh in /srv/taskapi/.env, always as ghcr.io/...@sha256:...
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env}
+    restart: unless-stopped
+    env_file:
+      - app.env                     # server-only settings and secrets, mode 600
+    environment:
+      PORT: "3000"
+      DATA_DIR: /app/data
+    ports:
+      - "127.0.0.1:3000:3000"       # Nginx stays the only public entry point
+    volumes:
+      - taskdata:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  taskdata:

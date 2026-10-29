@@ -1,0 +1,149 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege: read-only by default; jobs ask for more only where needed
+permissions:
+  contents: read
+
+# Never run two pipelines for the same branch at once; queue them instead
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  build:
+    name: Build and publish image
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Compute the lowercase image name
+        id: name
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.name.outputs.image }}
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Record the immutable image reference
+        id: ref
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          echo "image=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Published \`${IMAGE}@${DIGEST}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke-test the published image
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+        run: |
+          docker run -d --name smoke -p 3000:3000 "$IMAGE"
+          for i in $(seq 1 15); do
+            if curl -fsS http://localhost:3000/health; then
+              echo; docker rm -f smoke; exit 0
+            fi
+            sleep 2
+          done
+          echo "Image failed its smoke test"; docker logs smoke; exit 1
+
+  deploy:
+    name: Deploy to Ubuntu server
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production         # add required reviewers here = continuous delivery
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Deploy the new image
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          IMAGE: ${{ needs.build.outputs.image }}
+        run: |
+          echo "Deploying $IMAGE"
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "${DEPLOY_USER}@${DEPLOY_HOST}" "/srv/taskapi/deploy.sh '${IMAGE}'"
+
+      - name: Verify from the internet
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          curl -fsS --retry 5 --retry-delay 3 --retry-all-errors "http://${DEPLOY_HOST}/version" | tee version.json
+          grep -q "${GITHUB_SHA}" version.json
+          echo "Commit \`${GITHUB_SHA}\` is live in production" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the private key from the runner
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

@@ -1,0 +1,28 @@
+# Development / Session 2 Compose file: builds the image on the server.
+# Production (Session 3) uses deploy/compose.yaml, which pulls from GHCR.
+
+# Fixed project name: containers, networks and volumes are prefixed 'taskapi'
+name: taskapi
+
+services:
+  app:
+    build: .                          # build from the Dockerfile in this directory
+    image: devops-task-api:local      # tag the built image
+    restart: unless-stopped           # come back after crashes and reboots
+    environment:
+      PORT: "3000"
+      APP_ENV: compose
+      DATA_DIR: /app/data
+    ports:
+      - "127.0.0.1:3000:3000"         # localhost only: Nginx is the public entry point
+    volumes:
+      - taskdata:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  taskdata:

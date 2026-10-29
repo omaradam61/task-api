@@ -1,0 +1,17 @@
+{
+  "name": "devops-task-api",
+  "version": "1.0.0",
+  "description": "Sample application for the 3-session DevOps and CI/CD hands-on bootcamp",
+  "private": true,
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}
