@@ -7,16 +7,25 @@ name: taskapi
 services:
   app:
     build: .                          # build from the Dockerfile in this directory
-    image: devops-task-api:local      # tag the built image
+    # image: devops-task-api:local      # tag the built image
     restart: unless-stopped           # come back after crashes and reboots
     environment:
       PORT: "3000"
       APP_ENV: compose
       DATA_DIR: /app/data
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: mysecretpassword
+      DB_NAME: postgres
     ports:
       - "127.0.0.1:3000:3000"         # localhost only: Nginx is the public entry point
     volumes:
       - taskdata:/app/data
+    depends_on:
+      - db
+    networks:
+      - taskapi
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 15s
@@ -24,5 +33,22 @@ services:
       retries: 3
       start_period: 10s
 
+  db:
+    image: postgres:18
+    container_name: postgres-dev
+    environment:
+      POSTGRES_PASSWORD: mysecretpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    networks:
+      - taskapi
+
 volumes:
   taskdata:
+  postgres_data:
+
+networks:
+  taskapi:
+    driver: bridge
