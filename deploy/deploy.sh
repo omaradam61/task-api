@@ -14,14 +14,24 @@ fi
 
 cd "$APP_DIR"
 
-# 1. Remember the release that is running now, for rollback
-if [[ -f .env ]]; then cp .env .env.previous; fi
+# 1. Pull first, BEFORE touching any state. If the pull fails (private
+#    package, no registry login, typo) nothing on the server has changed.
+if ! docker pull "$NEW_IMAGE"; then
+  echo "ERROR: could not pull $NEW_IMAGE." >&2
+  echo "Is the GHCR package public, or is this server logged in to ghcr.io?" >&2
+  exit 1
+fi
 
-# 2. Point Compose at the new image
+# 2. Remember the release that is running now, for rollback.
+#    Re-deploying the same image must not overwrite the rollback target.
+if [[ -f .env ]] && [[ "$(cat .env)" != "APP_IMAGE=$NEW_IMAGE" ]]; then
+  cp .env .env.previous
+fi
+
+# 3. Point Compose at the new image
 echo "APP_IMAGE=$NEW_IMAGE" > .env
 
-# 3. Pull, start, and wait until Docker reports the container healthy
-docker compose pull app
+# 4. Start it and wait until Docker reports the container healthy
 if docker compose up -d --wait --wait-timeout 60; then
   echo "Container is healthy."
 else
@@ -35,10 +45,11 @@ else
   exit 1
 fi
 
-# 4. Verify through Nginx: the same path users take
-curl -fsS http://127.0.0.1/health && echo
+# 5. Verify through Nginx: the same path users take
+curl -fsS --retry 5 --retry-delay 2 --retry-all-errors http://127.0.0.1/health && echo
 curl -fsS http://127.0.0.1/version && echo
 
-# 5. Remove unused images to keep the disk clean
+# 6. Remove unused images to keep the disk clean
+#    (rollback.sh re-pulls the previous digest if it was removed)
 docker image prune -f > /dev/null
 echo "Deployed $NEW_IMAGE"

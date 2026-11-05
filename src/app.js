@@ -39,4 +39,16 @@ app.post('/tasks', (req, res) => {
   res.status(201).json(task);
 });
 
+// Unknown routes: answer in JSON like the rest of the API
+app.use((req, res) => {
+  res.status(404).json({ error: 'not found' });
+});
+
+// Errors (e.g. malformed JSON bodies): JSON instead of an HTML error page
+app.use((err, req, res, next) => {
+  const status = err.status || err.statusCode || 500;
+  if (status >= 500) console.error(err);
+  res.status(status).json({ error: status >= 500 ? 'internal server error' : err.message });
+});
+
 module.exports = app;

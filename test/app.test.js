@@ -54,3 +54,19 @@ test('POST /tasks without a title returns 400', async () => {
   });
   assert.strictEqual(res.status, 400);
 });
+
+test('unknown routes return a JSON 404', async () => {
+  const res = await fetch(`${base}/does-not-exist`);
+  assert.strictEqual(res.status, 404);
+  assert.deepStrictEqual(await res.json(), { error: 'not found' });
+});
+
+test('malformed JSON returns a JSON 400', async () => {
+  const res = await fetch(`${base}/tasks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{not json',
+  });
+  assert.strictEqual(res.status, 400);
+  assert.strictEqual(typeof (await res.json()).error, 'string');
+});
